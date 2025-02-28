@@ -1,0 +1,398 @@
+alias: inverter_controller
+description: Configure inverter based on Feed-In price
+triggers:
+  - trigger: time_pattern
+    seconds: /10
+conditions: []
+actions:
+  - sequence:
+      - action: pyscript.find_sell_start
+        data:
+          discharge_pwr: "{{ available_battery_discharge_power }}"
+          reserve_pct: "{{ bat_res_pct }}"
+          floor_price: "{{ floor_price }}"
+        response_variable: sell_data
+      - choose:
+          - conditions:
+              - alias: Feed-in price is zero
+                condition: template
+                value_template: "{{fipc|abs == 0}}"
+            sequence:
+              - choose:
+                  - conditions:
+                      - alias: Battery Charge/Discharge Power is not max_bat_pwr
+                        condition: template
+                        value_template: >-
+                          {{ states('sensor.battery_max_charge_power')|int !=
+                          max_bat_pwr }}
+                    sequence:
+                      - action: input_number.set_value
+                        metadata: {}
+                        data:
+                          value: "{{ max_bat_pwr }}"
+                        target:
+                          entity_id: input_number.set_sg_battery_max_charge_power
+                      - action: notify.persistent_notification
+                        metadata: {}
+                        data:
+                          message: Feed In Zero - Reset Battery Charge Power "{{fipc}}"
+                  - conditions:
+                      - alias: Export Power Limit is zero
+                        condition: template
+                        value_template: "{{ states('sensor.export_power_limit')|int == 0}}"
+                    sequence:
+                      - action: input_number.set_value
+                        metadata: {}
+                        data:
+                          value: "{{ max_exp_power }}"
+                        target:
+                          entity_id: input_number.set_sg_export_power_limit
+                      - delay:
+                          hours: 0
+                          minutes: 0
+                          seconds: 10
+                          milliseconds: 0
+                      - action: input_select.select_option
+                        target:
+                          entity_id: input_select.set_sg_export_power_limit_mode
+                        data:
+                          option: Disabled
+                      - action: notify.persistent_notification
+                        metadata: {}
+                        data:
+                          message: Feed In Zero, disabling export power limit mode
+                default: []
+        default: []
+      - choose:
+          - conditions:
+              - alias: Feed-in price is positive
+                condition: template
+                value_template: "{{fipc>0}}"
+            sequence:
+              - choose:
+                  - conditions:
+                      - alias: Export Power Limit is zero
+                        condition: template
+                        value_template: "{{ states('sensor.export_power_limit')|int == 0}}"
+                    sequence:
+                      - action: input_number.set_value
+                        metadata: {}
+                        data:
+                          value: "{{ max_exp_pwr }}"
+                        target:
+                          entity_id: input_number.set_sg_export_power_limit
+                      - delay:
+                          hours: 0
+                          minutes: 0
+                          seconds: 10
+                          milliseconds: 0
+                      - action: input_select.select_option
+                        target:
+                          entity_id: input_select.set_sg_export_power_limit_mode
+                        data:
+                          option: Disabled
+                      - action: notify.persistent_notification
+                        metadata: {}
+                        data:
+                          message: >-
+                            Feed In Positive {{fipc}}, disabling export power
+                            limit mode
+                  - conditions:
+                      - alias: Surplus power > thr_exp_pwr
+                        condition: template
+                        value_template: "{{ spl_pwr > thr_exp_pwr }}"
+                      - alias: Battery Level below 94%
+                        condition: template
+                        value_template: "{{ states('sensor.battery_level')|int < thr_bat_pct}}"
+                    sequence:
+                      - choose:
+                          - conditions:
+                              - alias: Battery Max Charge power is not min_bat_pwr
+                                condition: template
+                                value_template: >-
+                                  {{
+                                  states('sensor.battery_max_charge_power')|int
+                                  != min_bat_pwr}}
+                              - alias: Before bat_win_beg or after bat_win_end
+                                condition: template
+                                value_template: >-
+                                  {{ now() < today_at(bat_win_beg) or now() >
+                                  today_at(bat_win_end) }}
+                            sequence:
+                              - action: input_number.set_value
+                                metadata: {}
+                                data:
+                                  value: "{{ min_bat_pwr }}"
+                                target:
+                                  entity_id: input_number.set_sg_battery_max_charge_power
+                              - action: notify.persistent_notification
+                                metadata: {}
+                                data:
+                                  message: >-
+                                    Feed In Positive {{fipc}} prioritise exports
+                                    over charging
+                          - conditions:
+                              - alias: Battery Max Charge power is not max_bat_pwr
+                                condition: template
+                                value_template: >-
+                                  {{
+                                  states('sensor.battery_max_charge_power')|int
+                                  != max_bat_pwr }}
+                              - alias: After bat_win_beg and before bat_win_end
+                                condition: template
+                                value_template: >-
+                                  {{ today_at(bat_win_beg) < now() <
+                                  today_at(bat_win_end) }}
+                            sequence:
+                              - action: input_number.set_value
+                                metadata: {}
+                                data:
+                                  value: "{{ max_bat_pwr }}"
+                                target:
+                                  entity_id: input_number.set_sg_battery_max_charge_power
+                              - action: notify.persistent_notification
+                                metadata: {}
+                                data:
+                                  message: >-
+                                    Feed In Positive {{ fipc }} {{ bat_win_beg}}
+
+                                    prioritise charge over export {{
+                                    states('sensor.battery_level') }}% 
+                        default: []
+                default: []
+        default: []
+      - choose:
+          - conditions:
+              - alias: Feed-in price is negative
+                condition: template
+                value_template: "{{fipc<0}}"
+              - alias: Export Power Limit is non-zero
+                condition: template
+                value_template: "{{ states('sensor.export_power_limit')|int != 0}}"
+              - alias: export average power > 1000W
+                condition: template
+                value_template: "{{ export_avg_power|float > 1000 }}"
+              - alias: export average_to_peak_ratio > 0.5
+                condition: template
+                value_template: "{{ export_avg_to_peak_ratio|float > 0.5 }}"
+            sequence:
+              - action: input_number.set_value
+                metadata: {}
+                data:
+                  value: "{{ max_bat_pwr }}"
+                target:
+                  entity_id: input_number.set_sg_battery_max_charge_power
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.set_sg_export_power_limit_mode
+                data:
+                  option: Enabled
+              - delay:
+                  hours: 0
+                  minutes: 0
+                  seconds: 10
+                  milliseconds: 0
+              - action: input_number.set_value
+                metadata: {}
+                data:
+                  value: 0
+                target:
+                  entity_id: input_number.set_sg_export_power_limit
+              - action: notify.persistent_notification
+                metadata: {}
+                data:
+                  message: |-
+                    Feed In Negative {{fipc}} enabling export power limit mode
+
+                    export_avg_to_peak_ratio {{ export_avg_to_peak_ratio }}
+
+                    export_avg_power {{ export_avg_power }}
+        default: []
+      - choose:
+          - conditions:
+              - alias: forced mode enabled
+                condition: template
+                value_template: "{{ states('sensor.ems_mode_selection_raw')|int == 2 }}"
+              - alias: forced battery discharge enabled
+                condition: template
+                value_template: >-
+                  {{
+                  states('sensor.battery_forced_charge_discharge_cmd_raw')|int 
+                  == 0x00BB }}
+            sequence:
+              - choose:
+                  - conditions:
+                      - alias: battery level below overnight reserve
+                        condition: template
+                        value_template: >-
+                          {{ states('sensor.battery_level')|int <= bat_res_pct
+                          }}
+                    sequence:
+                      - action: input_select.select_option
+                        target:
+                          entity_id: input_select.set_sg_ems_mode
+                        data:
+                          option: Self-consumption mode (default)
+                      - action: input_select.select_option
+                        target:
+                          entity_id: >-
+                            input_select.set_sg_battery_forced_charge_discharge_cmd
+                        data:
+                          option: Stop (default)
+                      - action: input_number.set_value
+                        metadata: {}
+                        data:
+                          value: 10
+                        target:
+                          entity_id: input_number.set_sg_reserved_soc_for_backup
+                      - action: notify.persistent_notification
+                        metadata: {}
+                        data:
+                          message: >-
+                            Reached Overnight Battery Reserve {{ bat_res_pct }},
+                            disabling forced discharge
+                  - conditions:
+                      - condition: or
+                        conditions:
+                          - alias: >-
+                              more than 1/2 hour in future AND worth 30c more
+                              than now AND NOT if discharging battery after
+                              sunrise in the morning
+                            condition: template
+                            value_template: >-
+                              {{ (sell_data['from_now_index']|int > 2) and
+                              (sell_data['from_now_delta']|float > 0.30 ) and
+                              not am_after_sunrise }}
+                          - alias: selling below floor price in current interval
+                            condition: template
+                            value_template: >-
+                              {{ (sell_data['from_now_index']|int == 0) and 
+                              (sell_data['sell_start'] == '1970-01-01
+                              00:00:00+11:00') }}
+                    sequence:
+                      - action: input_select.select_option
+                        target:
+                          entity_id: input_select.set_sg_ems_mode
+                        data:
+                          option: Self-consumption mode (default)
+                      - action: input_select.select_option
+                        target:
+                          entity_id: >-
+                            input_select.set_sg_battery_forced_charge_discharge_cmd
+                        data:
+                          option: Stop (default)
+                      - action: input_number.set_value
+                        metadata: {}
+                        data:
+                          value: "{{ bat_bak_pct }}"
+                        target:
+                          entity_id: input_number.set_sg_reserved_soc_for_backup
+                      - action: notify.persistent_notification
+                        metadata: {}
+                        data:
+                          message: |-
+                            better sell window found disabling forced discharge
+
+                            sell_start {{ sell_data['sell_start'] }}
+
+                            from_now_index {{ sell_data['from_now_index'] }}
+
+                            from_now_delta {{ sell_data['from_now_delta'] }}
+
+                            duration {{ sell_data['duration'] }}
+
+                            est_earn {{ sell_data['est_earn'] }}
+
+                            battery_level {{ states('sensor.battery_level') }}
+
+                            bat_res_pct {{ bat_res_pct }}
+                default: []
+        default: []
+      - choose:
+          - conditions:
+              - alias: forced mode disabled
+                condition: template
+                value_template: "{{ states('sensor.ems_mode_selection_raw')|int == 0 }}"
+              - alias: forced battery discharge disabled
+                condition: template
+                value_template: >-
+                  {{
+                  states('sensor.battery_forced_charge_discharge_cmd_raw')|int 
+                  == 0x00CC }}
+              - alias: battery level above overnight reserve
+                condition: template
+                value_template: "{{ states('sensor.battery_level')|int > bat_res_pct }}"
+              - alias: inside sell start window
+                condition: template
+                value_template: >-
+                  {{ sell_data['sell_start']|as_timestamp|int <
+                  now().timestamp()|int <
+                  (sell_data['sell_start']|as_timestamp|int +
+                  sell_data['duration']|int) }}
+            sequence:
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.set_sg_ems_mode
+                data:
+                  option: Forced mode
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.set_sg_battery_forced_charge_discharge_cmd
+                data:
+                  option: Forced discharge
+              - action: notify.persistent_notification
+                metadata: {}
+                data:
+                  message: |-
+                    Enabling forced discharge
+
+                    sell_start {{ sell_data['sell_start'] }}
+
+                    duration {{ sell_data['duration'] }}
+
+                    est_earn {{ sell_data['est_earn'] }}
+
+                    battery_level {{ states('sensor.battery_level') }}
+
+                    bat_res_pct {{ bat_res_pct }}
+        default: []
+variables:
+  fipc: >-
+    {% set fipc_val =
+    float(states('sensor.amber_feed_in_price')) %} {% if
+    fipc_val != 'unknown' %} {{ fipc_val * 100|int }} {% else %} 0 {% endif %}
+  spl_pwr: >-
+    {{ states('sensor.total_dc_power')|float(0) -
+    states('sensor.load_power')|float(0) }}
+  thr_exp_pwr: 500
+  max_bat_pwr: 10000
+  min_bat_pwr: 100
+  max_exp_pwr: 10000
+  bat_bak_pct: 10
+  bat_res_pct: >-
+    {% if ( as_timestamp(states('sensor.sun_next_rising')) - now().timestamp())
+    < 64800 %} {{ (15 + ( as_timestamp(states('sensor.sun_next_rising')) -
+    now().timestamp()) * 15 / (3600 * 10))|int }} {% else %} {{ bat_bak_pct }}
+    {% endif %}
+  thr_bat_pct: 94
+  floor_price: 0.05
+  bat_win_beg: "11:00:00"
+  bat_win_end: "15:00:00"
+  export_peak_power: >-
+    {% set sensor_val = states('sensor.export_power_three_minute_peak') %} {% if
+    sensor_val != 'unknown' %} {{ sensor_val }} {% else %} 0 {% endif %}
+  export_avg_power: >-
+    {% set sensor_val = states('sensor.export_power_three_minute_average') %} {%
+    if sensor_val != 'unknown' %} {{ sensor_val }} {% else %} 0 {% endif %}
+  export_avg_to_peak_ratio: >-
+    {% set peak = export_peak_power %} {% if peak > 0 %} {{
+    export_avg_power|float / peak }} {% else %} 0 {% endif %}
+  available_battery_discharge_power: "{{ max_bat_pwr - states('sensor.load_power_ten_minute_average')|int }}"
+  solar_pm: >-
+    {{ as_timestamp(states('sensor.sun_next_noon')) >
+    as_timestamp(states('sensor.sun_next_midnight')) > now().timestamp() }}
+  solar_am: >-
+    {{ as_timestamp(states('sensor.sun_next_midnight')) >
+    as_timestamp(states('sensor.sun_next_noon')) > now().timestamp() }}
+  am_after_sunrise: "{{ solar_am and states('sun.sun') == 'above_horizon' }}"
+mode: single

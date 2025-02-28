@@ -1,0 +1,49 @@
+
+# after enabling the SQL integration, add the below lines to configuration.yaml
+sql:
+  - name: Load Power Ten Minute Average
+    query: >
+      SELECT
+        avg(cast(states.state as integer)) as load_power_ten_min_avg
+      FROM
+        states
+        INNER JOIN states_meta ON
+          states.metadata_id = states_meta.metadata_id
+      WHERE
+        states_meta.entity_id = 'sensor.load_power'
+        AND last_updated_ts >= strftime('%s', 'now', '-10 minutes')
+    column: load_power_ten_min_avg
+    unit_of_measurement: W
+    device_class: Power
+    state_class: Measurement
+  - name: Export Power Three Minute Average
+    query: >
+      SELECT
+        avg(cast(states.state as integer)) as export_power_three_min_avg
+      FROM
+        states
+        INNER JOIN states_meta ON
+          states.metadata_id = states_meta.metadata_id
+      WHERE
+        states_meta.entity_id = 'sensor.export_power'
+        AND last_updated_ts >= strftime('%s', 'now', '-3 minutes')
+    column: export_power_three_min_avg
+    unit_of_measurement: W
+    device_class: Power
+    state_class: Measurement
+  - name: Export Power Three Minute Peak
+    query: >
+      SELECT
+        max(cast(states.state as integer)) as export_power_three_min_peak
+      FROM
+        states
+        INNER JOIN states_meta ON
+          states.metadata_id = states_meta.metadata_id
+      WHERE
+        states_meta.entity_id = 'sensor.export_power'
+        AND last_updated_ts >= strftime('%s', 'now', '-3 minutes')
+    column: export_power_three_min_peak
+    unit_of_measurement: W
+    device_class: Power
+    state_class: Measurement
+
